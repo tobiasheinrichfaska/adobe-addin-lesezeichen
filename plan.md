@@ -4,9 +4,11 @@
 
 ---
 
-## Bug A — `movePage` breaks on multi-page blocks that move backward
+## Bug A — `movePage` offset and direction
 
-### What the code does
+### Why it is NOT a bug (algorithm guarantee)
+
+The code does:
 
 ```js
 for (var k = 0; k < anzahlSeiten; k++) {
@@ -14,210 +16,241 @@ for (var k = 0; k < anzahlSeiten; k++) {
 }
 ```
 
-`movePage(nPage, nAfter)` removes the page at index `nPage` and re-inserts it after index `nAfter`.
+For this to work correctly, `vonSeite` must always be ≥ `aktuellerEinfuegePunkt` (i.e. the block always moves forward or stays in place). This is a structural property of the algorithm — not an accident:
 
-The loop is supposed to move an entire block of `anzahlSeiten` pages from `vonSeite` to `aktuellerEinfuegePunkt`.
+- `aktuellerEinfuegePunkt` starts at 0 and only ever increases by `anzahlSeiten` after each block is placed.
+- Every block placed so far has already been moved to positions `[0, aktuellerEinfuegePunkt)`.
+- Each remaining block's `startPage` is updated by the offset correction loop so that it reflects the physical reality after previous insertions.
+- An inductive argument shows that after the offset update, every remaining block's `startPage` is always ≥ the new `aktuellerEinfuegePunkt`.
 
-### Why it works for forward moves (vonSeite > aktuellerEinfuegePunkt)
+In other words: the algorithm builds the document from left to right. Blocks that have not yet been placed can only sit at or after the current insert point, never before it. A backward move is structurally impossible given correct offset tracking.
 
-When a block moves forward, the insert point is to the LEFT of the source block. After removing `vonSeite + k` and inserting it left of the source:
-- Pages after the insertion point and before `vonSeite + k` shift right by 1
-- Pages after `vonSeite + k` shift left by 1
-- The two shifts cancel for the remaining source pages (indices `vonSeite + k + 1` and beyond)
-- So `vonSeite + k` for the next iteration still points to the correct next source page ✓
-
-Verified trace (vonSeite=5, insert=2, 3 pages):
+**The `+ k` on the source index is also correct for forward moves:**
+Removing `vonSeite + k` (which is always to the right of the insert point) and inserting it to the left causes pages between insert and source to shift right, and pages after source to shift left. These cancel for the remaining source pages. Verified trace:
 
 ```
-Start: [p0 p1 p2 p3 p4 | p5 p6 p7 | p8]
-k=0: movePage(5, 1) → [p0 p1 p5 p2 p3 p4 p6 p7 p8]   p6 still at 6 ✓
-k=1: movePage(6, 2) → [p0 p1 p5 p6 p2 p3 p4 p7 p8]   p7 still at 7 ✓
-k=2: movePage(7, 3) → [p0 p1 p5 p6 p7 p2 p3 p4 p8]   ✓
+Source block p5,p6,p7 → move to position 2:
+k=0: movePage(5,1) → [p0 p1 p5 p2 p3 p4 p6 p7]   p6 still at 6 ✓
+k=1: movePage(6,2) → [p0 p1 p5 p6 p2 p3 p4 p7]   p7 still at 7 ✓
+k=2: movePage(7,3) → [p0 p1 p5 p6 p7 p2 p3 p4]   ✓
 ```
 
-### Why it breaks for backward moves (vonSeite < aktuellerEinfuegePunkt)
+### The implicit assumption is hidden and fragile
 
-When a block moves backward, the insert point is to the RIGHT of the source block. Removing `vonSeite` shifts all pages to its right LEFT by 1 — including the remaining pages of the source block.
+The algorithm's correctness depends on forward-only moves, but nothing in the code states or enforces this. If the offset update ever contains a bug (or a future change breaks the invariant), `movePage` will silently produce wrong results.
 
-After k=0, the next source page was at `vonSeite + 1` but it has shifted down to `vonSeite`. The code then reads `vonSeite + 1`, which now points to the page AFTER the block — a wrong source page.
+### How to reproduce a failure (if the invariant were broken)
 
-Verified trace (vonSeite=2, insert=6, 3 pages):
+Build a minimal PDF:
+- 6 pages, bookmarks UI order: A(p3), B(p1), C(p5) with block sizes A=2, B=2, C=2
+- Manually set `arbeitsliste[1].startPage = 0` before `sortiereSeitenBloecke` runs (bypassing offset update in the console)
+- This forces B to appear as a backward move (vonSeite=0 < aktuellerEinfuegePunkt=2)
+- Result: B's second page will end up in the wrong position because `vonSeite + k` after k=1 points to the page that shifted down to fill B's vacated slot
+
+### Planned options
+
+**Option A1 — Document and rename (low effort)**
+
+- Rename `sortiereSeitenBloecke` to `sortiereVorwaerts` or add a comment block explaining the invariant
+- Add an assertion (Acrobat JS has no assert, so an `if (vonSeite < aktuellerEinfuegePunkt) { app.alert("Interner Fehler: Rückwärtsbewegung erkannt."); return []; }` guard) to surface invariant violations as explicit errors rather than silent corruption
+
+**Option A2 — Generalize to all directions (higher effort)**
+
+Rewrite the move loop to handle both forward and backward moves correctly. The forward case is unchanged. The backward case requires a different iteration order (last-to-first source, fixed insert target) and careful accounting for how removal shifts the insert index:
 
 ```
-Start: [p0 p1 | p2 p3 p4 | p5 p6 p7]
-k=0: remove p2, insert after idx 5 → [p0 p1 p3 p4 p5 p6 p2 p7]
-     p3 is now at index 2, but next iteration uses vonSeite+1=3 → reads p4 ✗
-k=1: movePage(3, 6) → moves p4, not p3. p3 is now orphaned between its
-     neighbours, p2 and p4 are together at the end but p3 is left behind.
+Backward move: vonSeite < aktuellerEinfuegePunkt
+For each page from last to first (k = anzahlSeiten-1 down to 0):
+  insert page at vonSeite+k after page aktuellerEinfuegePunkt-1
+  (adjust insert index for the page removal before it)
 ```
 
-### Why you haven't seen this
+This is a non-trivial rewrite requiring its own trace verification and test PDF.
 
-Two conditions must both be true:
-1. **A block must move backward** — a bookmark that appears LATER in the bookmark panel must currently sit on a page that is EARLIER in the PDF. In a document where pages were added or scanned in rough bookmark order this never happens.
-2. **The block must be more than one page long** — when `anzahlSeiten = 1`, k only ever equals 0, so there is no second iteration and the offset error never occurs.
-
-In practice, PDFs built systematically chapter-by-chapter will always have forward-moving or same-position blocks. A document where this triggers would be, e.g., a legal brief whose appendices come first physically but last in the bookmark hierarchy, each appendix being ≥ 2 pages.
-
-### How to reproduce
-
-Build a minimal test PDF:
-- 6 pages total, blank content
-- Bookmark A → page 4 (0-based index 3), 2 pages long
-- Bookmark B → page 1 (0-based index 0), 2 pages long
-- Bookmark C → page 6 (index 5), 1 page long
-
-Bookmark panel order: A, B, C (so B should sort before A).
-Running the script requires block B (physical pages 1–2) to move backward to position 0 while block A (physical pages 3–4) moves forward. After sorting, pages should be ordered B1, B2, A1, A2, C. With the bug, A1 or A2 will appear in the wrong order.
+**Recommendation:** A1 now (safety guard + comment), A2 as a separate future task.
 
 ---
 
-## Bug B — Secondary bookmarks silently dropped (insertChild commented out)
+## Bug B — Duplicate-page bookmarks (insertChild commented out)
 
-### What the code does
+### Context — DigitalerUnterlagenOrdner file format
 
-`bereinigeDuplikate()` finds bookmarks that point to the same page as an earlier bookmark and marks them `istHauptLesezeichen = false`. The original intent was:
+PDFs exported by BelegTool (DigitalerUnterlagenOrdner) have a strict hierarchical structure: folder bookmarks and their first child document always start on the same page. The second bookmark pointing to that page is always exactly one level deeper and positioned immediately after its parent in the tree.
 
-```js
-hauptEintrag.bookmark.insertChild(eintrag.bookmark, hauptEintrag.childCount);
-```
+This means `bereinigeDuplikate()` correctly detects these pairs, and the current behaviour — skip the secondary in page moves, include it in the TOC at the same page as the primary, leave the tree structure unchanged — produces the correct result for BelegTool PDFs.
 
-This line is **commented out**. `childCount` is incremented anyway.
+The commented-out `insertChild` was a planned cleanup step (re-parent secondary as a child of the primary) that is not needed for this file format and was deliberately left inactive.
 
-### What happens without it
+### Visible symptom if you encounter it
 
-In `sortiereSeitenBloecke()`, secondary bookmarks hit the `continue` branch (line 311–323). They ARE written to `ihvDruckDaten` (TOC output) using `letzteGueltigeHauptSeite` as their page — correct so far. But:
-
-- Their physical pages are never moved separately (fine — those pages belong to the primary's block and move with it)
-- Their position in the bookmark tree is unchanged — they are NOT re-parented under the primary
-- If the secondary bookmark has its own children, those children are also not reparented
-
-The visible result is: in the bookmark panel the secondary stays at its original level; in the generated TOC both primary and secondary appear side by side at the same page number.
-
-### Why you haven't seen this
-
-Requires two or more bookmarks pointing to **exactly the same page number**. This is unusual in well-structured documents. Common cause: two chapter headings were placed on the same scan page, or a sub-section was bookmarked at the same page as its parent. If your test PDFs all have one bookmark per page, this code path is never reached.
+Two TOC lines pointing to the same page number, displayed at their current tree depth rather than being nested. Not a crash, but visually redundant in other PDF formats.
 
 ### How to reproduce
 
-- PDF with 4 pages
-- Bookmark "Kapitel 1" → page 1
-- Bookmark "Abschnitt 1a" → also page 1 (same page, different bookmark)
-- Bookmark "Kapitel 2" → page 2
+- PDF with 3 pages
+- Bookmark "Kapitel 1" → page 0
+- Bookmark "Abschnitt 1a" → page 0 (same page, sibling in tree, not child)
+- Bookmark "Kapitel 2" → page 1
+- Run script → TOC shows "Kapitel 1" and "Abschnitt 1a" both with page number 1, at the same indentation
 
-Run the script. Both "Kapitel 1" and "Abschnitt 1a" appear in the TOC pointing to the same page. In the bookmark panel they remain siblings rather than "Abschnitt 1a" being nested under "Kapitel 1".
-Whether this is a bug or just "incomplete feature" depends on intended behaviour.
+### Planned option (future only, not urgent)
+
+When `bereinigeDuplikate` detects a duplicate, pause and ask:
+
+```
+"Lesezeichen 'Abschnitt 1a' verweist auf dieselbe Seite wie 'Kapitel 1'.
+ Was soll passieren?
+ [Zusammenführen: Abschnitt als Kind einhängen]   [Im TOC überspringen]   [Belassen]"
+```
+
+Only needed if non-BelegTool PDFs are processed. Defer until then.
 
 ---
 
-## Bug C — `bm.execute()` breaks on JavaScript-action bookmarks
+## Bug C — `bm.execute()` on JavaScript-action bookmarks
 
-### What the code does
+### The problem
 
 ```js
 function getBookmarkPage(bm) {
     var currentPage = this.pageNum;
-    bm.execute();                  // navigates the viewer to the bookmark target
-    var targetPage = this.pageNum; // reads where we landed
+    bm.execute();                  // navigates to bookmark target
+    var targetPage = this.pageNum; // reads resulting page
     this.pageNum = currentPage;    // navigate back
     return targetPage;
 }
 ```
 
-### The problem
+`bm.execute()` fires whatever action the bookmark holds. For non-page bookmarks (JavaScript action, URL, form submit, etc.):
+- `this.pageNum` does not change → wrong page recorded (returns current page, not bookmark target)
+- If the action opens a dialog (`app.alert`, `app.response`), the sort is blocked mid-run waiting for user input
+- Any data already modified (pages moved) cannot be undone
 
-Bookmarks in Acrobat can hold any action, not just page navigation. Common non-page actions:
-- `app.alert("…")` — dialog
-- Calling a named JavaScript function
-- Opening a URL or attachment
-- Submitting form data
-
-When `bm.execute()` triggers a JavaScript action, `this.pageNum` does not change (no navigation happened), so `getBookmarkPage` returns the current page — silently wrong. If the JS action opens a dialog, the entire sort is blocked waiting for user input mid-run.
-
-### The correct API
-
-Acrobat's Bookmark object exposes `bm.pageNum` directly:
-- Returns the 0-based page index for a page-navigation action
-- Returns `undefined` (or `-1` depending on Acrobat version) for non-page actions
-
-Using `bm.pageNum` eliminates the navigation side-effect and makes non-page bookmarks detectable without executing them.
-
-### Why you haven't seen this
-
-Your PDFs likely use only standard page-navigation bookmarks created by Acrobat or Word/PDF export tools. Manual JavaScript-action bookmarks are rare in everyday documents. They appear in interactive PDFs, forms, and documents built programmatically for kiosk/presentation use.
+The correct API is `bm.pageNum`, which returns the 0-based page index for page-navigation bookmarks and `undefined` for all others — no side effects, no navigation.
 
 ### How to reproduce
 
-1. Open a PDF in Acrobat
-2. Right-click a bookmark → Properties → Actions tab
-3. Add action: "Run a JavaScript" → `app.alert("test");`
-4. Remove the default "Go to a page in this document" action, leaving only the JS action
-5. Run the script → the alert fires mid-run, blocking execution; the sort result for this bookmark's page will be wrong (recorded as whatever page was current at the time of execution)
+1. Open any PDF in Acrobat
+2. Right-click a bookmark → Properties → Actions
+3. Delete the "Go to page" action; add "Run a JavaScript" → `app.alert("test");`
+4. Run the script → alert fires in the middle of `befulleBeideListenRekursiv`, blocking everything. The affected bookmark records the wrong page, causing silent missorting or a crash.
 
----
+### Why you haven't seen it
 
-## Planned fix for Bug C — two options
+Your PDFs use only standard page-navigation bookmarks produced by BelegTool's pikepdf export or by Word/PDF export tools. JavaScript-action bookmarks only appear in interactive PDFs built for kiosks, forms, or programmatic automation.
 
-### Option A: Abort if JS-action bookmarks are detected (conservative)
+### Planned fix — two choices, user decides before any PDF changes
 
-Before the sort begins, scan every bookmark recursively. For any bookmark where `bm.pageNum === undefined`, collect its name. If any are found, show an alert listing them and stop:
+**Step 1 (detection):** At the very start of `ausfuehrenSortierungOptimiert`, before touching the document, scan all bookmarks recursively and collect names where `bm.pageNum === undefined`.
 
-```
-"Folgende Lesezeichen haben JavaScript-Aktionen und können nicht
- sortiert werden. Bitte entfernen Sie die JS-Aktion oder ändern
- Sie sie auf eine Seitennavigation:
- - Name des Lesezeichens 1
- - Name des Lesezeichens 2"
-```
-
-No data is modified. User must fix bookmarks manually before running again.
-
-**Pros:** Simple, safe, no data loss.  
-**Cons:** If the user has one unrelated JS bookmark in a 200-bookmark document, the entire sort is blocked.
-
-### Option B: Offer to strip JS actions and proceed (power option)
-
-After detecting JS-action bookmarks, present a choice:
+**Step 2 (choice dialog):** If any are found, show a dialog:
 
 ```
-"3 Lesezeichen haben JavaScript-Aktionen (keine Seitenziele):
+"Folgende Lesezeichen enthalten JavaScript-Aktionen und können nicht
+ nach Seiten sortiert werden:
  - Deckblatt
  - Anhang A
- - Impressum
 
  Was soll passieren?
- [Nur diese überspringen]   [JS-Aktionen entfernen & sortieren]   [Abbrechen]"
+ [Alle JS aus PDF entfernen & sortieren]   [Abbrechen]"
 ```
 
-- **Nur diese überspringen**: exclude JS-action bookmarks from sort and TOC; leave their actions and tree position unchanged.
-- **JS-Aktionen entfernen**: call `bm.setAction("this.pageNum = 0;")` on each offending bookmark to replace the JS action with a neutral page-navigation action (page 0). Bookmark is now page-sortable but its original JS functionality is permanently lost.
-- **Abbrechen**: do nothing.
+- **Abbrechen:** Exit immediately. No changes to the document.
+- **Alle JS entfernen:** Strip all JavaScript from the entire document before proceeding:
+  - Set each JS-action bookmark to a neutral page-navigation action (`bm.setAction("this.pageNum = 0;")`)
+  - Additionally clear document-level and page-level scripts via Acrobat's `this.removeScripts()` or equivalent — removes all JS from the whole PDF, not just bookmarks
+  - This is intentionally broad: the user explicitly consented, and partial JS removal would leave an inconsistent document
 
-**Pros:** Flexible, handles edge cases without blocking the entire workflow.  
-**Cons:** More UI complexity; the "entfernen" path is destructive (irreversible without undo, which doesn't work after `beginPriv` anyway).
+If no JS-action bookmarks are found, proceed silently without the dialog.
 
-### Recommendation
-
-Implement Option B. The "überspringen" path is the default safe choice; "entfernen" is explicitly opt-in and destructive. This matches how Acrobat Pro itself handles similar conflicts (warn + choice, never silent data loss).
-
-### Implementation steps (not yet approved)
-
-1. Extract `bm.execute()` → `bm.pageNum` replacement in `getBookmarkPage()`
-2. Add `sammelJsLesezeichen(root)` — recursive scan returning array of bookmark names where `bm.pageNum === undefined`
-3. At the top of `ausfuehrenSortierungOptimiert()`, call scan; if result is non-empty, show `app.response()` dialog with the three choices
-4. Thread choice through: skip-list passed to `befulleBeideListenRekursiv`, or strip loop before it runs
-5. Update `befulleBeideListenRekursiv` to accept an optional skip-set
+**Why "kill all" rather than per-bookmark choice:**  
+Partial JS removal (strip only offending bookmarks) leaves the document in a mixed state where some interactive JS still works. Offering that inconsistency as an option creates support confusion. A clear "all JS goes" choice is safer and easier to reason about.
 
 ---
 
-## Other bugs (lower priority, no fix planned yet)
+## New feature — TOC with clickable links
 
-| # | Summary | Fix when |
+### What it should do
+
+Currently the TOC is drawn using read-only text fields. No click behaviour.
+
+Desired:
+1. Clicking a TOC entry (title or page number) jumps to the corresponding page in the PDF
+2. Each content page has a small "↑ TOC" button/link that jumps back to the TOC
+
+### Implementation approach
+
+Replace the `addField` text fields with **button fields** (`"button"` type in Acrobat JS). Buttons support an `OnMouseUp` action that can execute a page-jump:
+
+```js
+// Instead of addField(..., "text", ...)
+var btn = this.addField(feldName, "button", aktuelleIhvSeite, textRect);
+btn.buttonSetCaption(datensatz.name);
+btn.setAction("MouseUp", "this.pageNum = " + zielSeiteImPDF + ";");
+btn.textSize = ...;
+```
+
+Back-link on content pages: insert a small button field on each content page that navigates back to IHV page 0:
+
+```js
+var backBtn = this.addField("BackToTOC_" + seite, "button", seite, backRect);
+backBtn.buttonSetCaption("↑ TOC");
+backBtn.setAction("MouseUp", "this.pageNum = 0;");
+```
+
+### Open design questions (decide before implementing)
+
+- Should forward-links replace text fields entirely, or should text fields remain with a transparent clickable button overlaid?
+- Where exactly should the back-link appear (top-right corner, bottom-center)?
+- Should the back-link appear on ALL content pages, or only on first pages of each block?
+
+---
+
+## New feature — PDF split with cross-referenced TOC
+
+### What it should do
+
+Split the sorted PDF into multiple output files, each ≤ N pages. Splits always happen at a top-level TOC boundary (never mid-chapter). Each output file contains a full TOC showing all chapters, with a clear marker indicating which file holds each chapter.
+
+Example output TOC entry:
+```
+3. Kapitel Drei ........... Datei 2, Seite 1
+```
+
+### Algorithm outline
+
+**Phase 1 — Determine split points**
+- Walk `arbeitsliste` (main bookmarks, in order) accumulating page count
+- When cumulative count would exceed N, record a split here
+- Ensure the split always falls at a block boundary (never mid-block)
+
+**Phase 2 — Create output files**
+- For each segment, call `this.extractPages(startPage, endPage)` to produce a Doc object
+- Or export the full sorted PDF first and split post-sort
+
+**Phase 3 — Inject cross-referenced TOC into each file**
+- Full chapter list as before, but page numbers for chapters NOT in this file show `"→ Datei X, S. Y"` instead of a local page number
+- Local chapters use normal page numbers
+- Chapter entries from other files can be visually dimmed (grey text via `txtFeld.textColor = color.gray`) or use a different font
+
+### Open design questions
+
+- User input: how is N specified? A dialog box at the start? A fixed setting?
+- Output: saved as separate PDFs in the same folder as the source? User picks a folder?
+- Naming: `originalname_Teil1.pdf`, `originalname_Teil2.pdf`?
+- Should cross-file TOC entries still be clickable (would need to open the other file — complex) or plain text only?
+- This feature interacts with the existing BelegTool auto-split at >100 pages. Should it eventually replace that, or stay separate?
+
+---
+
+## Lower-priority items (no plan yet)
+
+| # | Issue | When to address |
 |---|---|---|
 | D | Magic layout numbers (22, 80, 50…) | When TOC layout needs tuning |
-| E | Double `var i` in loop | With next JS cleanup pass |
-| F | No guard for zero-length blocks | When stress-testing confirms it fires |
-| G | TOC name match ("automatisches inhaltsverzeichnis") is fragile | If renamed TOC causes issues |
+| E | Double `var i` re-declaration | Next JS cleanup pass |
+| F | Zero-length block not guarded | If stress testing shows it fires |
+| G | TOC cleanup only matches exact bookmark name | If renamed TOCs cause issues |
 
 ---
 
