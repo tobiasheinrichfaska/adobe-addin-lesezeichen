@@ -1,6 +1,6 @@
 # CLAUDE.md — Adobe Add In - Lesezeichen
 
-> Part of the `c:\skripte` workspace. See [general stuff/CLAUDE.md](../general%20stuff/CLAUDE.md) for workspace-wide conventions.
+> Part of the `c:\skripte` workspace. See [private/general stuff/CLAUDE.md](../../private/general%20stuff/CLAUDE.md) for workspace-wide conventions.
 
 ---
 
