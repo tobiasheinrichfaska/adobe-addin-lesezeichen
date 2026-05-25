@@ -58,6 +58,14 @@ No version number yet — first release. Next release should add `v1.0.0` as a c
 - No undo support — Acrobat's undo stack is cleared after `app.beginPriv` operations.
 - The "Automatisches Inhaltsverzeichnis" detection is case-insensitive name matching; a renamed TOC won't be cleaned up.
 
+## Acrobat JS engine — `this` context (important)
+
+In standard browser/Node JavaScript, calling a plain (non-method) function sets `this` to the global object (`window` or `globalThis`). In **Adobe Acrobat's embedded JS engine** the document *is* the global object. This means `this` inside any function — regardless of nesting level — resolves to the current Doc object, not a detached global.
+
+Consequence: helper functions like `loescheInhaltsverzeichnisUndBerechneOffset()` and `sortiereSeitenBloecke()` successfully call `this.deletePages()`, `this.movePage()`, etc. even though they are plain function calls, not method calls on a Doc instance. This works correctly in Acrobat and must not be "fixed" by passing a `doc` parameter — that would be an unnecessary change that adds noise without benefit.
+
+This differs from how the same code would behave in a browser console or Node — do not apply standard JS linting rules about `this` to Acrobat scripts.
+
 ## GitHub
 
 https://github.com/tobiasheinrichfaska/adobe-addin-lesezeichen
