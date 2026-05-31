@@ -1,5 +1,5 @@
+// v1.0.0
 function ermittleLesezeichenTiefe(bm) {
-    // Stoppt das Skript und gibt Zeit, um in Strg+J zu schauen
     var tiefe = 0;
     var aktuellesBM = bm;
     while (aktuellesBM && aktuellesBM !== this.bookmarkRoot) {
@@ -32,10 +32,10 @@ function befulleBeideListenRekursiv(bm, uiListe, arbeitsliste) {
         for (var i = 0; i < bm.children.length; i++) {
             var child = bm.children[i];
             var zielSeite = getBookmarkPage(child);
-            
+
             child.uiPosition = aktuellerUiIndex;
             uiListe.push(child);
-            
+
             arbeitsliste.push({
                 bookmark: child,
                 startPage: zielSeite,
@@ -44,7 +44,7 @@ function befulleBeideListenRekursiv(bm, uiListe, arbeitsliste) {
                 childCount: 0,
                 uiPosition: aktuellerUiIndex
             });
-            
+
             aktuellerUiIndex++;
             befulleBeideListenRekursiv(child, uiListe, arbeitsliste);
         }
@@ -68,8 +68,7 @@ function bereinigeDuplikate(arbeitsliste) {
             eintrag.istHauptLesezeichen = false;
             var erstVorkommenIndex = seitenMap[s];
             var hauptEintrag = arbeitsliste[erstVorkommenIndex];
-            
-            // hauptEintrag.bookmark.insertChild(eintrag.bookmark, hauptEintrag.childCount);
+
             hauptEintrag.childCount++;
         }
     }
@@ -79,7 +78,7 @@ function bereinigeDuplikate(arbeitsliste) {
 function berechneBlockLaengen(arbeitsliste, gesamtSeiten) {
     for (var i = 0; i < arbeitsliste.length; i++) {
         if (!arbeitsliste[i].istHauptLesezeichen) continue;
-        
+
         var naechsterIndex = -1;
         for (var j = i + 1; j < arbeitsliste.length; j++) {
             if (arbeitsliste[j].istHauptLesezeichen) {
@@ -87,7 +86,7 @@ function berechneBlockLaengen(arbeitsliste, gesamtSeiten) {
                 break;
             }
         }
-        
+
         if (naechsterIndex !== -1) {
             arbeitsliste[i].laenge = arbeitsliste[naechsterIndex].startPage - arbeitsliste[i].startPage;
         } else {
@@ -110,8 +109,8 @@ var ausfuehrenSortierungOptimiert = app.trustedFunction(function() {
 
     var uiListe = [];
     var arbeitsliste = [];
-    aktuellerUiIndex = 0; 
-    
+    aktuellerUiIndex = 0;
+
     befulleBeideListenRekursiv(root, uiListe, arbeitsliste);
 
     arbeitsliste.sort(function(a, b) {
@@ -119,7 +118,7 @@ var ausfuehrenSortierungOptimiert = app.trustedFunction(function() {
     });
 
     bereinigeDuplikate(arbeitsliste);
-    
+
     berechneBlockLaengen(arbeitsliste, this.numPages);
 
     loescheInhaltsverzeichnisUndBerechneOffset(arbeitsliste);
@@ -138,10 +137,13 @@ var ausfuehrenSortierungOptimiert = app.trustedFunction(function() {
     var breite = seitenBox[2] - seitenBox[0]; // Rechts minus Links (ca. 595 Punkte)
     var hoehe = seitenBox[1] - seitenBox[3];  // Oben minus Unten (ca. 842 Punkte)
 
-
-    var zeilenAbstand = 22; 
-    var randOben = 80;      
-    var nutzbareHoehe = hoehe - randOben - 50; 
+    var zeilenAbstand = 22;
+    var randOben = 80;
+    var randUnten = 50;
+    var randLinks = 50;
+    var randRechts = 80;
+    var einrueckungProTiefe = 15;
+    var nutzbareHoehe = hoehe - randOben - randUnten;
     var zeilenProSeite = Math.floor(nutzbareHoehe / zeilenAbstand);
 
     // Seitenanzahl berechnen direkt aus unserem mitgeschriebenen Array
@@ -172,9 +174,9 @@ var ausfuehrenSortierungOptimiert = app.trustedFunction(function() {
     var aktuelleIhvSeite = 0;
 
     // Wir drucken die Daten stur aus unserem mitgeschriebenen Array aus Schritt 5!
-    for (var i = 0; i < ihvDruckDaten.length; i++) {
-        var datensatz = ihvDruckDaten[i];
-        
+    for (var n = 0; n < ihvDruckDaten.length; n++) {
+        var datensatz = ihvDruckDaten[n];
+
         // Versatz der IHV-Seiten einrechnen
         var zielSeiteImPDF = datensatz.finaleStartSeite + benoetigteSeiten;
 
@@ -184,21 +186,19 @@ var ausfuehrenSortierungOptimiert = app.trustedFunction(function() {
         }
 
         var yPosition = hoehe - randOben - (aktuelleZeile * zeilenAbstand);
-        var xEinrueckung = 50 + (datensatz.tiefe * 15);
+        var xEinrueckung = randLinks + (datensatz.tiefe * einrueckungProTiefe);
 
         // A: Titel als Textfeld zeichnen (OHNE Hyperlink)
-        var feldName = "IHV_Text_" + i;
-        // ALT: var textRect = [xEinrueckung, yPosition, breite - 80, yPosition - zeilenAbstand + 4];
-        // NEU: Kleinerer Y-Wert (unten) nach vorne, größerer Y-Wert (oben) nach hinten
-        var textRect = [xEinrueckung, yPosition - zeilenAbstand + 4, breite - 80, yPosition];
+        var feldName = "IHV_Text_" + n;
+        // PDF Y-axis: lower coordinate = bottom, higher coordinate = top
+        var textRect = [xEinrueckung, yPosition - zeilenAbstand + 4, breite - randRechts, yPosition];
         var txtFeld = this.addField(feldName, "text", aktuelleIhvSeite, textRect);
         if (txtFeld) {
             txtFeld.value = datensatz.name;
             txtFeld.readonly = true;
             txtFeld.alignment = "left";
             txtFeld.textSize = (datensatz.tiefe === 0) ? 12 : 10;
-            // ALT: txtFeld.textFont = (datensatz.tiefe === 0) ? font.HelvBold : font.Helv;
-            // KORREKTUR: Verwendung von echten Text-Strings für die Formular-API
+            // textFont requires string names, not font.* constants
             txtFeld.textFont = (datensatz.tiefe === 0) ? "Helvetica-Bold" : "Helvetica";
 
             txtFeld.borderStyle = border.s;
@@ -206,9 +206,7 @@ var ausfuehrenSortierungOptimiert = app.trustedFunction(function() {
         }
 
         // B: Seitenzahl als Textfeld zeichnen (Rechtsbündig)
-        var seitenFeldName = "IHV_Seite_" + i;
-        // ALT: var seitenRect = [breite - 75, yPosition, breite - 50, yPosition - zeilenAbstand + 4];
-        // NEU: Kleinerer Y-Wert nach vorne, größerer Y-Wert nach hinten
+        var seitenFeldName = "IHV_Seite_" + n;
         var seitenRect = [breite - 75, yPosition - zeilenAbstand + 4, breite - 50, yPosition];
         var seitFeld = this.addField(seitenFeldName, "text", aktuelleIhvSeite, seitenRect);
         if (seitFeld) {
@@ -216,8 +214,6 @@ var ausfuehrenSortierungOptimiert = app.trustedFunction(function() {
             seitFeld.readonly = true;
             seitFeld.alignment = "right";
             seitFeld.textSize = (datensatz.tiefe === 0) ? 12 : 10;
-            // ALT: seitFeld.textFont = (datensatz.tiefe === 0) ? font.HelvBold : font.Helv;
-            // KORREKTUR: Verwendung von echten Text-Strings für die Formular-API
             seitFeld.textFont = (datensatz.tiefe === 0) ? "Helvetica-Bold" : "Helvetica";
 
             seitFeld.borderStyle = border.s;
@@ -232,13 +228,13 @@ var ausfuehrenSortierungOptimiert = app.trustedFunction(function() {
 
 
 // +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-// NEU: SCHRITT 4 - INHALTSVERZEICHNIS LÖSCHEN & OFFSET BERECHNEN
+// SCHRITT 4 - INHALTSVERZEICHNIS LÖSCHEN & OFFSET BERECHNEN
 // +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 function loescheInhaltsverzeichnisUndBerechneOffset(arbeitsliste) {
     var ihvStartSeite = -1;
     var ihvSeitenAnzahl = 0;
 
-    // Wir durchlaufen die Arbeitsliste rückwärts, damit das Löschen 
+    // Wir durchlaufen die Arbeitsliste rückwärts, damit das Löschen
     // eines Eintrags (splice) die Indizes der Schleife nicht stört
     for (var i = arbeitsliste.length - 1; i >= 0; i--) {
         var eintrag = arbeitsliste[i];
@@ -268,9 +264,9 @@ function loescheInhaltsverzeichnisUndBerechneOffset(arbeitsliste) {
     // 4. GLOBALER OFFSET: Wenn Seiten gelöscht wurden, passen wir die Startseiten
     // aller verbleibenden Lesezeichen an, die physisch HINTER dem IHV lagen.
     if (ihvSeitenAnzahl > 0) {
-        for (var i = 0; i < arbeitsliste.length; i++) {
-            if (arbeitsliste[i].startPage > ihvStartSeite) {
-                arbeitsliste[i].startPage -= ihvSeitenAnzahl;
+        for (var k = 0; k < arbeitsliste.length; k++) {
+            if (arbeitsliste[k].startPage > ihvStartSeite) {
+                arbeitsliste[k].startPage -= ihvSeitenAnzahl;
             }
         }
     }
@@ -280,10 +276,10 @@ function loescheInhaltsverzeichnisUndBerechneOffset(arbeitsliste) {
 // SCHRITT 5: SEITEN BLOCKWEISE UMSORTIEREN ANHAND DER UI-REIHENFOLGE
 // =========================================================================
 function sortiereSeitenBloecke(uiListe, arbeitsliste) {
-    var aktuellerEinfuegePunkt = 0; 
+    var aktuellerEinfuegePunkt = 0;
 
     // NEU: Unsere Gedächtnis-Variable für die Sekundärzeichen
-    var letzteGueltigeHauptSeite = 0; 
+    var letzteGueltigeHauptSeite = 0;
 
     // NEU: Hier sammeln wir die fertigen Druckdaten für das Inhaltsverzeichnis
     var ihvDruckDaten = [];
@@ -292,7 +288,7 @@ function sortiereSeitenBloecke(uiListe, arbeitsliste) {
     for (var i = 0; i < uiListe.length; i++) {
         var zielBM = uiListe[i];
         var datenIndex = -1;
-        
+
         // Finde den passenden Datenblock in der physikalisch sortierten Arbeitsliste
         for (var j = 0; j < arbeitsliste.length; j++) {
             // Wir verarbeiten NUR Hauptlesezeichen (Sekundäre hängen bereits als Child drunter)
@@ -310,7 +306,7 @@ function sortiereSeitenBloecke(uiListe, arbeitsliste) {
         // =====================================================================
         if (datenIndex !== -1 && !arbeitsliste[datenIndex].istHauptLesezeichen) {
             // Wenn es ein Sekundärpunkt ist, schreiben wir ihn JETZT ins IHV.
-            // Da er auf dieselbe Seite wie das aktuelle Hauptkapitel verweist, 
+            // Da er auf dieselbe Seite wie das aktuelle Hauptkapitel verweist,
             // nutzen wir einfach den unfehlbaren 'aktuellerEinfuegePunkt'!
             if (zielBM.name.toLowerCase() !== "automatisches inhaltsverzeichnis") {
                 ihvDruckDaten.push({
@@ -341,14 +337,14 @@ function sortiereSeitenBloecke(uiListe, arbeitsliste) {
                     tiefe: ermittleLesezeichenTiefe(zielBM),
                     finaleStartSeite: aktuellerEinfuegePunkt
                 });
-                letzteGueltigeHauptSeite = aktuellerEinfuegePunkt
+                letzteGueltigeHauptSeite = aktuellerEinfuegePunkt;
             }
             // =====================================================================
 
 
             // 1. Seiten des Blocks nacheinander an den aktuellen Einfügepunkt verschieben
             for (var k = 0; k < anzahlSeiten; k++) {
-                // Da nach jedem Verschieben die nächste Seite nachrückt, verschieben wir 
+                // Da nach jedem Verschieben die nächste Seite nachrückt, verschieben wir
                 // die Seiten mathematisch präzise nacheinander.
 
                 this.movePage(vonSeite + k, aktuellerEinfuegePunkt + k - 1);
@@ -357,10 +353,10 @@ function sortiereSeitenBloecke(uiListe, arbeitsliste) {
             // 2. PRÄZISE OFFSET-ANPASSUNG (Mathematischer Kern)
             // Da sich das Dokument physisch verschoben hat, passen wir die Startseiten
             // aller verbleibenden Blöcke in der Programmliste an.
-            for (var j = 0; j < arbeitsliste.length; j++) {
-                if (j === datenIndex || !arbeitsliste[j].istHauptLesezeichen) continue; 
-                
-                var andererBlock = arbeitsliste[j];
+            for (var m = 0; m < arbeitsliste.length; m++) {
+                if (m === datenIndex || !arbeitsliste[m].istHauptLesezeichen) continue;
+
+                var andererBlock = arbeitsliste[m];
 
                 // Fall A: Der andere Block lag physisch vor der Quelle, rückt durch das Einfügen nach hinten
                 if (andererBlock.startPage >= aktuellerEinfuegePunkt && andererBlock.startPage < vonSeite) {
@@ -389,13 +385,12 @@ function sortiereSeitenBloecke(uiListe, arbeitsliste) {
 
 
 
-
 // Registrierung im Menü "Anzeige"
 if (typeof app.addMenuItem !== "undefined") {
     app.addMenuItem({
         cName: "LesezeichenSortieren",
         cUser: "PDF nach Lesezeichen sortieren",
-        cParent: "View", 
+        cParent: "View",
         cExec: "ausfuehrenSortierungOptimiert();",
         cEnable: "event.rc = (event.target != null);"
     });
