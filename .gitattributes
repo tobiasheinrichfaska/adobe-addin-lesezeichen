@@ -1,0 +1,42 @@
+# Canonical .gitattributes for every project under c:\skripte
+# Copy to a project root as `.gitattributes`. Merge (do not overwrite) into
+# repos that already have one, e.g. Git-LFS rules.
+#
+# Why: Git-for-Windows sets core.autocrlf=true system-wide, so editing
+# LF-based files emits "LF will be replaced by CRLF" warnings and makes line
+# endings depend on each machine's git install. Pinning eol here makes line
+# endings repo-controlled and silences the warnings.
+#
+# After adding to an existing repo, normalize once:
+#   git add --renormalize .
+#   git commit -m "chore: normalize line endings to LF"   # only if changes
+#   git rm --cached -rq . && git reset --hard              # refresh worktree (clean tree only)
+
+# Normalize text to LF in the repo AND the working tree.
+* text=auto eol=lf
+
+# Windows batch files must stay CRLF (cmd.exe can mishandle LF-only scripts)
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# SVG is text — keep it normalized
+*.svg   text eol=lf
+
+# Binary assets — never convert
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.ico   binary
+*.gif   binary
+*.webp  binary
+*.wav   binary
+*.mp3   binary
+*.pdf   binary
+*.zip   binary
+*.ttf   binary
+*.otf   binary
+*.woff  binary
+*.woff2 binary
+*.aab   binary
+*.apk   binary
+*.keystore binary
